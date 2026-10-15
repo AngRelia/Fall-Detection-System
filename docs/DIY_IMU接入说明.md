@@ -269,17 +269,38 @@ OLED_ShowString(64, 8, snap.link_lost ? "LOST" : "OK ", OLED_6X8);
 
 ## 7. 调试排查顺序
 
-接上线却收不到数据时，按这个顺序查（每步都能独立确认）：
+接上线却收不到数据时，按这个顺序查（每步都能独立确认）。
+**第 0 步先做，能省掉一大半排查时间**：
 
-1. **节点A在发吗** —— 把节点A的 PA2 接 USB-TTL，用 `tools/serial_logger.py` 确认能解析出帧
-2. **波特率** —— 两边都是 115200（节点A的 `usart.c` 与它自己的 `.ioc` 都改过）
-3. **共地了吗** —— 这是最常见的疏漏
-4. **TX/RX 交叉了吗** —— 节点A PA2 → 本板 PB11
-5. **`DIY_IMU_Init` 是否成功** —— 失败说明 CubeMX 侧 DMA/中断没配好；
+0. **★ 烧写完有没有真的跑起来？**
+   2026-10-16 实测：主机收不到数据，**手动复位后立刻正常** —— 原因是 Keil 下载后
+   没有自动复位运行（停在旧状态/未启动），并不是链路或代码问题。
+   - **根治**：Keil → `Options for Target` → `Utilities` → `Settings` → `Download Function`
+     勾上 **Reset and Run**，以后下载完自动跑；
+   - **不改设置的话**：每次下载后按一下节点A 的复位键，并**看一眼节点A 自己的 OLED
+     有没有在动**（数值在跳 = 真的在跑，这是最省事的"活着"判据）。
+
+1. **先用主机端的数字做分层判断（菜单 2/4 页）**
+   | `RXB`（原始字节数） | `OK` / `CRC` | 结论 |
+   |---|---|---|
+   | 不动 | 全 0 | 物理层没数据 → 走第 3~5 步（共地/交叉/波特率） |
+   | 在涨 | `OK` 0、`CRC` 涨 | 字节到了但帧不合法 → 第 2、7 步 |
+   | 在涨 | `OK` 在涨 | 链路正常，看 `RATE` 是否 100 |
+   （`RXB` 是 2026-10-16 加到菜单页的，直接读 `DIY_IMU_GetStats().rx_bytes`，不改本任务）
+
+2. **节点A在发吗** —— 把节点A的 PA2 接 USB-TTL，用 `tools/serial_logger.py` 确认能解析出帧
+3. **波特率** —— 两边都是 115200（节点A的 `usart.c` 与它自己的 `.ioc` 都改过）
+4. **共地了吗** —— 这是最常见的疏漏
+5. **TX/RX 交叉了吗** —— 节点A PA2 → 本板 PB11
+6. **`DIY_IMU_Init` 是否成功** —— 失败说明 CubeMX 侧 DMA/中断没配好；
    看 `Core/Src/usart.c` 的 `hdma_usart3_rx` 是否为 `DMA_CIRCULAR`、`USART3_IRQn` 是否使能
-6. **回调有没有被调用** —— `main.c` 的 `HAL_UARTEx_RxEventCallback` 里在 USART3 分支打个断点
-7. **CRC 是否全错** —— 若 `crc_err` 涨而 `frames_ok` 不动，说明帧格式/CRC 对不上，
+7. **回调有没有被调用** —— `main.c` 的 `HAL_UARTEx_RxEventCallback` 里在 USART3 分支打个断点
+8. **CRC 是否全错** —— 若 `crc_err` 涨而 `frames_ok` 不动，说明帧格式/CRC 对不上，
    对照节点A的 `docs/串口帧协议.md` 逐字段核
+
+> **主机端有自愈**：`imu_recv_task.c` 里超过 `IMU_LINK_TIMEOUT_MS` 没收到字节会自动
+> `DIY_IMU_Reinit()` 重装接收，所以"主机自己卡死"的情况会自己恢复 —— 一旦需要**手动复位**
+> 才通，优先怀疑**对端（节点A）没在跑**，而不是主机侧。
 
 ---
 
