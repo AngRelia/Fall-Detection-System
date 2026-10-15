@@ -467,24 +467,41 @@ static uint8_t GPS_CheckSumOk(const char *s, uint16_t len)
 }
 
 /* $--RMC,UTC,status,lat,N,lon,E,spd,cog,date,mv,mvE,mode,nav*CS
- * 注意：s_fp[0] 是语句头（"GNRMC"），所以字段下标从 1 起算 */
+ * 注意：s_fp[0] 是语句头（"GNRMC"），所以字段下标从 1 起算
+ *
+ * ★ "只保留最后已知的**有效**定位"（2026-10-14 实测修正）
+ *   模块丢星后仍在 1 Hz 输出 RMC/GGA，但 `status=V`、经纬度字段为空。
+ *   若把这种帧也照单全收，就会出现："室内 v=0，但 lat/lon 被刷成 0，
+ *   且 fix_age 一直是几百毫秒" —— 与设计意图（v=0 时仍带**最后已知位置**，
+ *   并给出它**有多旧**）正好相反。实测报文曾出现
+ *   {"v":0,"lat":0,"lon":0,"hdop":2550,"fix_age":266} 就是这个原因。
+ *   所以：**只有有效定位（status=A）才更新位置/时间并刷新 stamp_ms**；
+ *   无效帧只更新"当前是否有效"的标志，位置保持上一次有效值不动。 */
 static void GPS_ParseRMC(uint8_t nf)
 {
     GPS_Fix_t f;
+    uint8_t   ok;
 
     if (nf < 10U) return;
 
     GPS_FixCopy(&f);
-    f.utc_ms        = GPS_ParseUtcMs(s_fp[1]);
-    f.status        = (uint8_t)((s_fp[2][0] == 'A') ? 1U : 0U);
-    f.lat_e7        = GPS_ParseCoordE7(s_fp[3], (uint8_t)((s_fp[4][0] == 'S') ? 1U : 0U));
-    f.lon_e7        = GPS_ParseCoordE7(s_fp[5], (uint8_t)((s_fp[6][0] == 'W') ? 1U : 0U));
-    /* 节 → cm/s：1 kn = 51.4444 cm/s，输入按 0.01 kn 解析 */
-    f.speed_cms     = (uint16_t)((GPS_ParseDec(s_fp[7], 2) * 5144UL) / 10000UL);
-    f.course_cdeg   = (uint16_t)GPS_ParseDec(s_fp[8], 2);
-    f.date_yyyymmdd = GPS_ParseDate(s_fp[9]);
-    f.stamp_ms      = HAL_GetTick();
-    f.has_rmc       = 1U;
+    ok = (uint8_t)((s_fp[2][0] == 'A') ? 1U : 0U);
+
+    f.status  = ok;
+    f.has_rmc = 1U;
+
+    if (ok != 0U)
+    {
+        f.utc_ms        = GPS_ParseUtcMs(s_fp[1]);
+        f.lat_e7        = GPS_ParseCoordE7(s_fp[3], (uint8_t)((s_fp[4][0] == 'S') ? 1U : 0U));
+        f.lon_e7        = GPS_ParseCoordE7(s_fp[5], (uint8_t)((s_fp[6][0] == 'W') ? 1U : 0U));
+        /* 节 → cm/s：1 kn = 51.4444 cm/s，输入按 0.01 kn 解析 */
+        f.speed_cms     = (uint16_t)((GPS_ParseDec(s_fp[7], 2) * 5144UL) / 10000UL);
+        f.course_cdeg   = (uint16_t)GPS_ParseDec(s_fp[8], 2);
+        f.date_yyyymmdd = GPS_ParseDate(s_fp[9]);
+        f.stamp_ms      = HAL_GetTick();   /* 只在这时刷新"最后已知位置"的时刻 */
+        f.fix_ever      = 1U;
+    }
 
     GPS_FixCommit(&f);
 }
@@ -554,23 +571,35 @@ static void GPS_ParseGSV(uint8_t nf)
 }
 
 /* $--GGA,UTC,lat,N,lon,E,quality,sats,hdop,alt,M,geoid,M,age,stn*CS
- * 同样：s_fp[0] 是语句头（"GNGGA"），字段下标从 1 起算 */
+ * 同样：s_fp[0] 是语句头（"GNGGA"），字段下标从 1 起算。
+ *
+ * ★ 与 RMC 同一原则：**只有 quality>0（有效定位）才更新位置/海拔/HDOP/时刻**。
+ *   丢星时模块会继续发 quality=0 的 GGA，其 hdop 常是 25.50 之类的占位值
+ *   （实测报文里出现过 "hdop":2550）—— 收下它就把上一次有效定位的结果毁了。 */
 static void GPS_ParseGGA(uint8_t nf)
 {
     GPS_Fix_t f;
+    uint8_t   quality;
 
     if (nf < 10U) return;
 
     GPS_FixCopy(&f);
-    f.utc_ms    = GPS_ParseUtcMs(s_fp[1]);
-    f.lat_e7    = GPS_ParseCoordE7(s_fp[2], (uint8_t)((s_fp[3][0] == 'S') ? 1U : 0U));
-    f.lon_e7    = GPS_ParseCoordE7(s_fp[4], (uint8_t)((s_fp[5][0] == 'W') ? 1U : 0U));
-    f.quality   = (uint8_t)GPS_ParseUint(s_fp[6]);
-    f.sats      = (uint8_t)GPS_ParseUint(s_fp[7]);
-    f.hdop_x100 = (uint16_t)GPS_ParseDec(s_fp[8], 2);
-    f.alt_cm    = GPS_ParseSignedDec(s_fp[9], 2);
-    f.stamp_ms  = HAL_GetTick();
-    f.has_gga   = 1U;
+    quality = (uint8_t)GPS_ParseUint(s_fp[6]);
+
+    f.quality = quality;
+    f.has_gga = 1U;
+
+    if (quality > 0U)
+    {
+        f.utc_ms    = GPS_ParseUtcMs(s_fp[1]);
+        f.lat_e7    = GPS_ParseCoordE7(s_fp[2], (uint8_t)((s_fp[3][0] == 'S') ? 1U : 0U));
+        f.lon_e7    = GPS_ParseCoordE7(s_fp[4], (uint8_t)((s_fp[5][0] == 'W') ? 1U : 0U));
+        f.sats      = (uint8_t)GPS_ParseUint(s_fp[7]);
+        f.hdop_x100 = (uint16_t)GPS_ParseDec(s_fp[8], 2);
+        f.alt_cm    = GPS_ParseSignedDec(s_fp[9], 2);
+        f.stamp_ms  = HAL_GetTick();
+        f.fix_ever  = 1U;
+    }
 
     GPS_FixCommit(&f);
 }
@@ -671,6 +700,12 @@ void GPS_Init(UART_HandleTypeDef *huart)
     s_ring_tail = 0;
     s_line_len  = 0;
     s_line_bad  = 0;
+
+    /* "最后已知位置"的基准时刻：开机时先填上当前 tick，避免刚开机就报出
+       一个巨大的 fix_age（stamp_ms 若为 0，age 会等于开机时长）。 */
+    s_fix.stamp_ms = HAL_GetTick();
+    s_fix.fix_ever = 0U;
+    s_fix_seq = 0U;
 
     /* 循环 DMA + 空闲中断：启动一次即可，HAL 每次事件回调给出绝对位置 */
     (void)HAL_UARTEx_ReceiveToIdle_DMA(huart, s_dma_buf, GPS_RX_DMA_SIZE);
@@ -779,7 +814,11 @@ uint16_t GPS_BuildJson(char *buf, uint16_t buflen, uint32_t now_ms)
         f.lat_e7 = 0; f.lon_e7 = 0; f.valid = 0; f.quality = 0; f.sats = 0;
         f.hdop_x100 = 0; f.alt_cm = 0; f.speed_cms = 0; f.course_cdeg = 0;
         f.stamp_ms = now_ms;
+        f.fix_ever = 0U;
     }
+    /* fix_age 的语义（务必与云端约定一致）：
+         fix_ever = 1 → 距**最后一次有效定位**的毫秒数（室内丢星后它会持续增长）；
+         fix_ever = 0 → 从未定位成功，用 -1 表达，避免与"刚刚定位过（0）"混淆。 */
     age = (uint32_t)(now_ms - f.stamp_ms);
 
     n = GPS_PutStr(buf, n, buflen, "{\"v\":");
@@ -801,7 +840,14 @@ uint16_t GPS_BuildJson(char *buf, uint16_t buflen, uint32_t now_ms)
     n = GPS_PutStr(buf, n, buflen, ",\"cog\":");
     n = GPS_PutUint(buf, n, buflen, f.course_cdeg);
     n = GPS_PutStr(buf, n, buflen, ",\"fix_age\":");
-    n = GPS_PutUint(buf, n, buflen, age);
+    if (f.fix_ever != 0U)
+    {
+        n = GPS_PutUint(buf, n, buflen, age);
+    }
+    else
+    {
+        n = GPS_PutInt(buf, n, buflen, -1);   /* -1 = 从未定位成功 */
+    }
     n = GPS_PutStr(buf, n, buflen, "}");
 
     return n;

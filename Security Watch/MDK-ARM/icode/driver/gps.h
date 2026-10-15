@@ -76,9 +76,13 @@ typedef struct
     uint16_t course_cdeg;    /* 对地航向 ×0.01° */
     uint32_t utc_ms;         /* UTC 当日毫秒 */
     uint32_t date_yyyymmdd;  /* 日期 yyyymmdd */
-    uint32_t stamp_ms;       /* 本机 tick（写入时刻） */
+    uint32_t stamp_ms;       /* **最后一次有效定位**的时刻（本机 tick）
+                                ★ 只有 status=A / quality>0 的帧才会刷新它，
+                                所以 (now - stamp_ms) 就是"最后已知位置有多旧" */
     uint8_t  has_rmc;        /* 收到过 RMC */
     uint8_t  has_gga;        /* 收到过 GGA */
+    uint8_t  fix_ever;       /* 曾经拿到过有效定位（1）。=0 表示"从未定位成功"，
+                                此时经纬度无意义，报文的 fix_age 用 -1 表达"从未有过" */
     /* ---- 以下两项来自 GSV，用于判断"天线/视野"是否正常（不是定位解算量）----
        为什么需要：模块在无源（陶瓷）天线下会一直报 $GPTXT ... ANTENNA OPEN，
        那条语句说明不了天线好坏；真正能说明问题的是"可见卫星数"和"最强信噪比"。
