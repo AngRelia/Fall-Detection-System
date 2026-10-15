@@ -731,6 +731,12 @@ static void OLED_Menu_Page(void)
 
     OLED_ShowString(0, 40, "STATE", OLED_6X8);
     OLED_ShowString(42, 40, (v.a_lost != 0U) ? "LOST  " : "LINKED", OLED_6X8);
+
+    /* RXB = 节点A 发来的原始字节数（排障第一判据）：
+       不动 → 物理层没数据（接线/共地/节点A 没在跑）；
+       在涨但上面 OK 不涨 → 字节到了但帧解不出来（波特率/帧格式）。 */
+    OLED_ShowString(0, 48, "RXB", OLED_6X8);
+    OLED_ShowNum(30, 48, v.a_rxb, 7, OLED_6X8);
   }
   /* ---------------- 3/4 GPS ---------------- */
   else if (v.page == 2U)

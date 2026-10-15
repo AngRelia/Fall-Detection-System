@@ -19,6 +19,7 @@
 #include "menu_task.h"
 #include "key.h"
 #include "imu_recv_task.h"
+#include "diy_imu.h"
 #include "gps.h"
 #include "hc08.h"
 #include "ble_task.h"
@@ -72,6 +73,8 @@ void Menu_GetView(Menu_View_t *out)
 static void Menu_Collect(Menu_View_t *v)
 {
   IMU_Recv_Snapshot_t imu;
+  DIY_IMU_Stats_t     imu_st;     /* 直接读驱动的只读统计（含 rx_bytes），
+                                     不去改 imu_recv_task（那条链路已跑通，不动它） */
   GPS_Fix_t           fix;
   uint32_t            txok = 0U, txdrop = 0U;
 
@@ -87,6 +90,9 @@ static void Menu_Collect(Menu_View_t *v)
   v->a_drop = imu.seq_drop;
   v->a_rsy  = imu.resync;
   v->a_rovr = imu.ring_overrun;
+  (void)memset(&imu_st, 0, sizeof(imu_st));
+  DIY_IMU_GetStats(&imu_st);
+  v->a_rxb  = imu_st.rx_bytes;
 
   /* ---- GPS ---- */
   v->g_alive = GPS_IsAlive(HAL_GetTick()) ? 1U : 0U;

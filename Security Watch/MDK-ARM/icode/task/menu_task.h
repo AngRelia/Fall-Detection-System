@@ -38,6 +38,8 @@ typedef struct
     uint32_t a_drop;            /* 序号跳变（估算丢帧） */
     uint32_t a_rsy;             /* 帧头重同步次数 */
     uint32_t a_rovr;            /* 帧环形缓冲覆盖次数 */
+    uint32_t a_rxb;             /* ★ 收到的原始字节数（排障第一判据：
+                                   0 或不动 = 物理层没数据；在涨但 OK 不涨 = 波特率/帧格式问题） */
 
     /* ---- GPS（USART1）---- */
     uint8_t  g_alive;           /* 1 = 5 s 内收到过字节 */
