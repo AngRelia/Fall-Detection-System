@@ -38,6 +38,17 @@ extern "C" {
    没接也不影响收发，只是 HC08_IsConnected() 恒为 0（屏幕显示 NOT CONN）。 */
 #define HC08_USE_STATE_PIN      1
 
+/* STATE 的有效电平：1 = 模块"已连接"时该脚输出高（常见），0 = 低有效（个别批次）。
+   若手机已连接、STATE 脚也确实接了，屏幕却仍显示 NOT CONN，就把这里改成 0。 */
+#define HC08_STATE_ACTIVE_HIGH  1
+
+/* 行结束的两种判据（见 hc08.c）：
+   1) 收到 '\n' / '\r' —— 手机 App 勾了"发送新行"时走这条；
+   2) 静默超时 —— 手机 App **默认不加换行**（2026-10-14 实测：发 5 次 PING 共 20 字节，
+      即每次 4 字节、无 CRLF），没有这条就永远收不到命令。
+      100 ms 远大于 BLE 分包间隔（≤50 ms），既兜住裸命令，又不会把拆包的长报文切断。 */
+#define HC08_LINE_IDLE_MS       100U
+
 /* ---- 生命周期 ---- */
 /* 绑定串口并启动「空闲中断 + 中断接收」。必须在调度器启动后、任务里调用。 */
 void HC08_Init(UART_HandleTypeDef *huart);

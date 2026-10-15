@@ -45,6 +45,8 @@ static volatile uint32_t s_last_rx_tick = 0U;
 /* 行装配（只在任务上下文使用） */
 static char     s_line[HC08_LINE_MAX];
 static uint16_t s_line_len = 0U;
+/* 最后一个字节到达的时刻：用于"静默判帧"（见 HC08_Process） */
+static uint32_t s_line_last_tick = 0U;
 
 /* 最近一条完整行 + "有新行待消费"标志（消费方是 ble_task） */
 static char     s_last_line[HC08_LINE_MAX];
@@ -57,6 +59,7 @@ static uint32_t s_at_err  = 0U;
 
 /* Private function prototypes -----------------------------------------------*/
 static void HC08_FeedByte(uint8_t c);
+static void HC08_FinishLine(void);
 static uint8_t HC08_LineHas(const char *line, const char *needle);
 
 /* ---------------------------------------------------------------------------
@@ -112,7 +115,19 @@ void HC08_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 }
 
 /* ---------------------------------------------------------------------------
- * 任务侧：排空环形缓冲 → 按行切分
+ * 任务侧：排空环形缓冲 → 组帧
+ *
+ * 组帧有两条判据（缺一不可）：
+ *   1) 显式行尾：收到 '\n' 或 '\r' 就收尾 —— 手机 App 勾了"发送新行"时走这条；
+ *   2) 静默判帧：行里已有内容、且距最后一个字节 ≥ HC08_LINE_IDLE_MS（默认 100 ms）
+ *      就认为这一条命令发完了。
+ *
+ * 为什么必须有第 2 条（2026-10-14 实测踩到）：
+ *   汇承 App 默认**不**给发送内容加换行。用户点 5 次"发送 PING"，App 统计"发送 20 字节"
+ *   = 5×4，也就是每次都只有 `PING` 四个字符、没有 CRLF。若只认 '\n'，
+ *   驱动会一直攒着这 4 个字符等行尾 → 命令永远不完整 → 手机收不到任何应答。
+ *   100 ms 的静默窗口远大于 BLE 分包间隔（一个连接间隔内可到 50 ms），
+ *   所以既兜住了"裸命令"，又不会把一条被拆成几个 BLE 包的长报文截断。
  * ------------------------------------------------------------------------- */
 void HC08_Process(void)
 {
@@ -123,69 +138,61 @@ void HC08_Process(void)
         s_ring_tail = (uint16_t)((s_ring_tail + 1U) % HC08_RX_RING_SIZE);
         HC08_FeedByte(c);
     }
+
+    /* 静默判帧：缓冲区已排空、行里有内容、且超过静默窗口 */
+    if ((s_line_len > 0U) &&
+        ((uint32_t)(HAL_GetTick() - s_line_last_tick) >= HC08_LINE_IDLE_MS))
+    {
+        HC08_FinishLine();
+    }
+}
+
+/* 把当前装配中的行收尾成"一条完整行"（供 '\n' / '\r' 与静默判帧共用） */
+static void HC08_FinishLine(void)
+{
+    if (s_line_len == 0U)
+    {
+        return;
+    }
+
+    s_line[s_line_len] = '\0';
+
+    {
+        uint16_t n = s_line_len;
+
+        if (n > (HC08_LINE_MAX - 1U))
+        {
+            n = (HC08_LINE_MAX - 1U);
+        }
+        (void)memcpy(s_last_line, s_line, n);
+        s_last_line[n] = '\0';
+    }
+
+    s_lines++;
+    s_line_ready = 1U;
+
+    /* AT 应答分类：模块正常回 "OK" 或 "OK+Set:..."，失败回 "ERROR"/"FAIL" */
+    if (HC08_LineHas(s_last_line, "OK") != 0U)
+    {
+        s_at_ok++;
+    }
+    else if ((HC08_LineHas(s_last_line, "ERROR") != 0U) ||
+             (HC08_LineHas(s_last_line, "FAIL") != 0U))
+    {
+        s_at_err++;
+    }
+
+    s_line_len = 0U;
 }
 
 static void HC08_FeedByte(uint8_t c)
 {
-    if (c == (uint8_t)'\n')
+    s_line_last_tick = HAL_GetTick();
+
+    /* 行尾：'\n' 或 '\r' 都当作一条命令结束（CRLF 时第二次调用是空行，直接返回） */
+    if ((c == (uint8_t)'\n') || (c == (uint8_t)'\r'))
     {
-        /* 去掉行尾 '\r'，收尾成一条完整行 */
-        if ((s_line_len > 0U) && (s_line[s_line_len - 1U] == '\r'))
-        {
-            s_line_len--;
-        }
-        s_line[s_line_len] = '\0';
-
-        if (s_line_len > 0U)
-        {
-            uint16_t n = s_line_len;
-
-            if (n > (HC08_LINE_MAX - 1U))
-            {
-                n = (HC08_LINE_MAX - 1U);
-            }
-            (void)memcpy(s_last_line, s_line, n);
-            s_last_line[n] = '\0';
-
-            s_lines++;
-            s_line_ready = 1U;
-
-            /* AT 应答分类：模块正常回 "OK" 或 "OK+Set:..."，失败回 "ERROR"/"FAIL" */
-            if (HC08_LineHas(s_last_line, "OK") != 0U)
-            {
-                s_at_ok++;
-            }
-            else if ((HC08_LineHas(s_last_line, "ERROR") != 0U) ||
-                     (HC08_LineHas(s_last_line, "FAIL") != 0U))
-            {
-                s_at_err++;
-            }
-        }
-        s_line_len = 0U;
-        return;
-    }
-
-    if (c == (uint8_t)'\r')
-    {
-        /* 行内容里不保留 '\r'（有些模块用 CR 单独作为行结束） */
-        if (s_line_len < (HC08_LINE_MAX - 1U))
-        {
-            s_line[s_line_len] = '\0';
-            if (s_line_len > 0U)
-            {
-                uint16_t n = s_line_len;
-
-                (void)memcpy(s_last_line, s_line, n);
-                s_last_line[n] = '\0';
-                s_lines++;
-                s_line_ready = 1U;
-                if (HC08_LineHas(s_last_line, "OK") != 0U)
-                {
-                    s_at_ok++;
-                }
-            }
-            s_line_len = 0U;
-        }
+        HC08_FinishLine();
         return;
     }
 
@@ -277,7 +284,13 @@ uint8_t HC08_SendAT(const char *cmd)
 uint8_t HC08_IsConnected(void)
 {
 #if (HC08_USE_STATE_PIN == 1)
-    return (uint8_t)((HAL_GPIO_ReadPin(HC08_STATE_GPIO_Port, HC08_STATE_Pin) == GPIO_PIN_SET) ? 1U : 0U);
+    GPIO_PinState st = HAL_GPIO_ReadPin(HC08_STATE_GPIO_Port, HC08_STATE_Pin);
+
+#if (HC08_STATE_ACTIVE_HIGH == 1)
+    return (uint8_t)((st == GPIO_PIN_SET) ? 1U : 0U);
+#else
+    return (uint8_t)((st == GPIO_PIN_RESET) ? 1U : 0U);
+#endif
 #else
     return 0U;
 #endif
