@@ -29,6 +29,7 @@
 #include "ble_task.h"
 #include "oled_task.h"
 #include "gps_task.h"
+#include "menu_task.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -84,6 +85,11 @@
 /* GPS 任务只做环形缓冲排空 + 少量整数解析，96 字节的语句缓冲是 file-static，
    不占任务栈，128 word（512 B）够用。 */
 #define GPS_TASK_STACK          128
+/* 菜单任务：只做翻页 + 汇总各子系统快照（双缓冲约 180 B 静态），
+   全是整数运算与 memcpy，192 word（768 B）足够。
+   优先级放在 OLED(Low) 之上、告警/BLE 之下，保证菜单状态比屏幕更新。 */
+#define MENU_TASK_PRIO          osPriorityBelowNormal
+#define MENU_TASK_STACK         192
 /* OLED 显存缓冲是 OLED.c 里的 file-static 数组，不吃任务栈，
    刷屏本身不递归、不放大局部变量；GPS 接收页的语句原文与定位快照也放 file-static，
    128 word（512 B）经实测够用 */
@@ -188,6 +194,9 @@ void MX_FREERTOS_Init(void) {
    *   真实余量以开机时 OLED 上的 FreeHeap 数字为准（那一行就是为此加的）。
    * --------------------------------------------------------------------- */
   GPS_Task_Init(GPS_TASK_PRIO, GPS_TASK_STACK);
+  /* 菜单/状态总览任务：上/下键翻页，汇总三条链路 + 系统状态供 OLED 显示。
+     必须在 OLED 之前创建——OLED 首帧就会去读菜单视图。 */
+  Menu_Task_Init(MENU_TASK_PRIO, MENU_TASK_STACK);
   OLED_Task_Init(OLED_TASK_PRIO, OLED_TASK_STACK);
 
   /* 堆余量自检：任务栈全部从 configTOTAL_HEAP_SIZE 动态分配。

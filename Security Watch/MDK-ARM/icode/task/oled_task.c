@@ -59,6 +59,7 @@
 #include "gps.h"
 #include "hc08.h"
 #include "ble_task.h"
+#include "menu_task.h"
 #include <string.h>
 
 /* Private typedef -----------------------------------------------------------*/
@@ -77,9 +78,10 @@
 #define OLED_SCREEN_KEYTEST     1
 #define OLED_SCREEN_GPS         2
 #define OLED_SCREEN_HC08        3
-/* 当前默认显示 HC-08 蓝牙页（正在联调蓝牙）。
-   要看 GPS 页就把下面改成 OLED_SCREEN_GPS，要看按键页改成 OLED_SCREEN_KEYTEST。 */
-#define OLED_SCREEN_SEL         OLED_SCREEN_HC08
+#define OLED_SCREEN_MENU        4
+/* 当前默认显示【菜单/状态总览】页（一屏看三条链路通没通）。
+   要看其它屏就改这里：OLED_SCREEN_IMU / KEYTEST / GPS / HC08。 */
+#define OLED_SCREEN_SEL         OLED_SCREEN_MENU
 
 /* 目标刷新率。整屏 OLED_Update() 在软件 I2C 下约 10~30 ms，
    10 Hz 已足够看清，且不会长时间占住 CPU。 */
@@ -139,13 +141,18 @@ static void OLED_GPS_Page(void);
 #endif
 
 /* GPS 页与 HC-08 页都要用「定长写字符串」（不足补空格，避免长短变化留残影） */
-#if ((OLED_SCREEN_SEL == OLED_SCREEN_GPS) || (OLED_SCREEN_SEL == OLED_SCREEN_HC08))
+#if ((OLED_SCREEN_SEL == OLED_SCREEN_GPS) || (OLED_SCREEN_SEL == OLED_SCREEN_HC08) || (OLED_SCREEN_SEL == OLED_SCREEN_MENU))
 static void OLED_ShowChars(int16_t X, int16_t Y, const char *s, uint8_t n);
 #endif
 
 #if (OLED_SCREEN_SEL == OLED_SCREEN_HC08)
 /* HC-08 蓝牙页（两页：链路 / 统计） */
 static void OLED_HC08_Page(void);
+#endif
+
+#if (OLED_SCREEN_SEL == OLED_SCREEN_MENU)
+/* 菜单/状态总览页（四页：总览 / 节点A / GPS / BLE），视图来自 menu_task */
+static void OLED_Menu_Page(void);
 #endif
 /* USER CODE END FunctionPrototypes */
 
@@ -328,7 +335,7 @@ static void OLED_ShowScaled(int16_t X, int16_t Y, int32_t value,
  * 栈占用控制：语句原文与定位快照都用 **file-static**，不占任务栈
  * （本任务栈在 freertos.c 里只有 128 word = 512 B，必须省着用）。
  * ------------------------------------------------------------------------- */
-#if ((OLED_SCREEN_SEL == OLED_SCREEN_GPS) || (OLED_SCREEN_SEL == OLED_SCREEN_HC08))
+#if ((OLED_SCREEN_SEL == OLED_SCREEN_GPS) || (OLED_SCREEN_SEL == OLED_SCREEN_HC08) || (OLED_SCREEN_SEL == OLED_SCREEN_MENU))
 /* 定长打印 n 个字符，不足补空格；避免 OLED_ShowString 画到屏外把缓冲写乱 */
 static void OLED_ShowChars(int16_t X, int16_t Y, const char *s, uint8_t n)
 {
@@ -635,6 +642,156 @@ static void OLED_HC08_Page(void)
 }
 #endif /* OLED_SCREEN_SEL == OLED_SCREEN_HC08 */
 
+/* ---------------------------------------------------------------------------
+ * 菜单 / 状态总览页（四页，上/下键翻页）
+ *
+ * 视图由 menu_task 汇总（双缓冲，读不到"写一半"的数据），本函数只负责画。
+ * 四页的用途就是回答"各部分链路通了没"：
+ *   1/4 总览 ：节点A 帧率与链路、GPS 定位、BLE 连接 —— 三行判读 + 堆余量 + 运行时长
+ *   2/4 节点A：帧率、通过帧数、CRC 错、丢帧、重同步、缓冲覆盖、链路状态
+ *   3/4 GPS  ：链路与字节数、语句数/校验错、FIX/质量/卫星、可见星/信噪比、经纬度
+ *   4/4 BLE  ：连接状态、收发字节、AT 应答计数、上报成功/丢弃、最近收到的一行
+ *
+ * 翻页由 menu_task 消费 Key_TakeNav()（导航锁存，不占事件队列）；
+ * 本屏与 GPS/BLE 调试屏是编译期互斥的，所以不存在"两个任务抢导航事件"。
+ * ------------------------------------------------------------------------- */
+#if (OLED_SCREEN_SEL == OLED_SCREEN_MENU)
+static void OLED_Menu_Page(void)
+{
+  static Menu_View_t v;          /* static：省任务栈（结构约 90 B） */
+  uint32_t hh, mm, ss;
+
+  Menu_GetView(&v);
+
+  /* ---------------- 1/4 总览 ---------------- */
+  if (v.page == 0U)
+  {
+    OLED_ShowString(0, 0, "MENU  LINK", OLED_6X8);
+
+    OLED_ShowString(0, 8, "NODE-A", OLED_6X8);
+    OLED_ShowNum(42, 8, (uint32_t)v.a_rate, 3, OLED_6X8);
+    OLED_ShowString(60, 8, "Hz", OLED_6X8);
+    OLED_ShowString(72, 8, (v.a_lost != 0U) ? "LOST" : "OK", OLED_6X8);
+
+    OLED_ShowString(0, 16, "GPS", OLED_6X8);
+    OLED_ShowString(24, 16, (v.g_fix != 0U) ? "FIX" : "no ", OLED_6X8);
+    OLED_ShowString(48, 16, "SAT", OLED_6X8);
+    OLED_ShowNum(72, 16, (uint32_t)v.g_st, 2, OLED_6X8);
+
+    OLED_ShowString(0, 24, "BLE", OLED_6X8);
+    OLED_ShowString(24, 24, (v.b_conn != 0U) ? "CONN" : "----", OLED_6X8);
+    OLED_ShowString(54, 24, "TX", OLED_6X8);
+    OLED_ShowNum(72, 24, v.b_txb, 3, OLED_6X8);
+
+    OLED_ShowString(0, 32, "HEAP", OLED_6X8);
+    OLED_ShowNum(30, 32, v.heap, 7, OLED_6X8);
+
+    hh = v.uptime_s / 3600U;
+    mm = (v.uptime_s / 60U) % 60U;
+    ss = v.uptime_s % 60U;
+    OLED_ShowString(0, 40, "UPTIME", OLED_6X8);
+    OLED_ShowNum(48, 40, hh, 2, OLED_6X8);
+    OLED_ShowChar(60, 40, ':', OLED_6X8);
+    OLED_ShowNum(66, 40, mm, 2, OLED_6X8);
+    OLED_ShowChar(78, 40, ':', OLED_6X8);
+    OLED_ShowNum(84, 40, ss, 2, OLED_6X8);
+  }
+  /* ---------------- 2/4 节点A（IMU 链路） ---------------- */
+  else if (v.page == 1U)
+  {
+    OLED_ShowString(0, 0, "MENU  NODE A", OLED_6X8);
+
+    OLED_ShowString(0, 8, "RATE", OLED_6X8);
+    OLED_ShowNum(30, 8, (uint32_t)v.a_rate, 3, OLED_6X8);
+    OLED_ShowString(54, 8, "Hz", OLED_6X8);
+
+    OLED_ShowString(0, 16, "OK", OLED_6X8);
+    OLED_ShowNum(24, 16, v.a_ok, 7, OLED_6X8);
+
+    OLED_ShowString(0, 24, "CRC", OLED_6X8);
+    OLED_ShowNum(30, 24, v.a_crc, 4, OLED_6X8);
+    OLED_ShowString(60, 24, "RSY", OLED_6X8);
+    OLED_ShowNum(84, 24, v.a_rsy, 3, OLED_6X8);
+
+    OLED_ShowString(0, 32, "DROP", OLED_6X8);
+    OLED_ShowNum(30, 32, v.a_drop, 4, OLED_6X8);
+    OLED_ShowString(60, 32, "BUF", OLED_6X8);
+    OLED_ShowNum(84, 32, v.a_rovr, 3, OLED_6X8);
+
+    OLED_ShowString(0, 40, "STATE", OLED_6X8);
+    OLED_ShowString(42, 40, (v.a_lost != 0U) ? "LOST  " : "LINKED", OLED_6X8);
+  }
+  /* ---------------- 3/4 GPS ---------------- */
+  else if (v.page == 2U)
+  {
+    OLED_ShowString(0, 0, "MENU  GPS", OLED_6X8);
+
+    OLED_ShowString(0, 8, "LINK", OLED_6X8);
+    OLED_ShowString(30, 8, (v.g_alive != 0U) ? "ALIVE" : "LOST ", OLED_6X8);
+    OLED_ShowString(66, 8, "RX", OLED_6X8);
+    OLED_ShowNum(78, 8, v.g_rx, 5, OLED_6X8);
+
+    OLED_ShowString(0, 16, "SEN", OLED_6X8);
+    OLED_ShowNum(24, 16, v.g_sen, 5, OLED_6X8);
+    OLED_ShowString(60, 16, "CSE", OLED_6X8);
+    OLED_ShowNum(84, 16, v.g_cse, 3, OLED_6X8);
+
+    OLED_ShowString(0, 24, "FIX", OLED_6X8);
+    OLED_ShowString(24, 24, (v.g_fix != 0U) ? "YES" : "NO ", OLED_6X8);
+    OLED_ShowString(48, 24, "Q", OLED_6X8);
+    OLED_ShowNum(54, 24, (uint32_t)v.g_q, 1, OLED_6X8);
+    OLED_ShowString(66, 24, "SAT", OLED_6X8);
+    OLED_ShowNum(90, 24, (uint32_t)v.g_st, 2, OLED_6X8);
+
+    OLED_ShowString(0, 32, "VW", OLED_6X8);
+    OLED_ShowNum(18, 32, (uint32_t)v.g_vw, 2, OLED_6X8);
+    OLED_ShowString(42, 32, "MX", OLED_6X8);
+    OLED_ShowNum(60, 32, (uint32_t)v.g_mx, 2, OLED_6X8);
+    OLED_ShowString(78, 32, "dBHz", OLED_6X8);
+
+    OLED_ShowString(0, 40, "LAT", OLED_6X8);
+    OLED_ShowScaled(24, 40, v.g_lat_e7, 10000000, 7, 11);
+    OLED_ShowString(96, 40, (v.g_lat_e7 < 0) ? "S" : "N", OLED_6X8);
+
+    OLED_ShowString(0, 48, "LON", OLED_6X8);
+    OLED_ShowScaled(24, 48, v.g_lon_e7, 10000000, 7, 11);
+    OLED_ShowString(96, 48, (v.g_lon_e7 < 0) ? "W" : "E", OLED_6X8);
+  }
+  /* ---------------- 4/4 BLE（HC-08） ---------------- */
+  else
+  {
+    OLED_ShowString(0, 0, "MENU  BLE", OLED_6X8);
+
+    OLED_ShowString(0, 8, "LINK", OLED_6X8);
+    OLED_ShowString(30, 8, (v.b_conn != 0U) ? "CONN" : "NOT CONN", OLED_6X8);
+
+    OLED_ShowString(0, 16, "TXB", OLED_6X8);
+    OLED_ShowNum(30, 16, v.b_txb, 8, OLED_6X8);
+
+    OLED_ShowString(0, 24, "RXB", OLED_6X8);
+    OLED_ShowNum(30, 24, v.b_rxb, 8, OLED_6X8);
+
+    OLED_ShowString(0, 32, "ATOK", OLED_6X8);
+    OLED_ShowNum(30, 32, v.b_atok, 4, OLED_6X8);
+    OLED_ShowString(60, 32, "ATERR", OLED_6X8);
+    OLED_ShowNum(96, 32, v.b_aterr, 2, OLED_6X8);
+
+    OLED_ShowString(0, 40, "SEND", OLED_6X8);
+    OLED_ShowNum(30, 40, v.b_send, 4, OLED_6X8);
+    OLED_ShowString(60, 40, "DROP", OLED_6X8);
+    OLED_ShowNum(90, 40, v.b_drop, 3, OLED_6X8);
+
+    OLED_ShowString(0, 48, "LAST", OLED_6X8);
+    OLED_ShowChars(30, 48, v.b_last, 12U);
+  }
+
+  /* 页码提示（四页共用） */
+  OLED_ShowString(0, 56, "UP/DN=PAGE", OLED_6X8);
+  OLED_ShowNum(78, 56, (uint32_t)(v.page + 1U), 1, OLED_6X8);
+  OLED_ShowString(84, 56, "/4", OLED_6X8);
+}
+#endif /* OLED_SCREEN_SEL == OLED_SCREEN_MENU */
+
 
 /* ---------------------------------------------------------------------------
  * 任务入口
@@ -652,6 +809,8 @@ void OLED_Task_Entry(void *argument)
   OLED_ShowString(0, 0, "GPS receiving...", OLED_6X8);
 #elif (OLED_SCREEN_SEL == OLED_SCREEN_HC08)
   OLED_ShowString(0, 0, "HC-08 BLE...", OLED_6X8);
+#elif (OLED_SCREEN_SEL == OLED_SCREEN_MENU)
+  OLED_ShowString(0, 0, "MENU  LINK...", OLED_6X8);
 #else
   OLED_ShowString(0, 0, "IMU link monitoring", OLED_6X8);
 #endif
@@ -671,6 +830,9 @@ void OLED_Task_Entry(void *argument)
 #elif (OLED_SCREEN_SEL == OLED_SCREEN_HC08)
     /* ---------------- HC-08 蓝牙页 ---------------- */
     OLED_HC08_Page();
+#elif (OLED_SCREEN_SEL == OLED_SCREEN_MENU)
+    /* ---------------- 菜单/状态总览页 ---------------- */
+    OLED_Menu_Page();
 #else
     /* 帧与统计快照放栈上: 本任务每轮跑完即睡, 无需跨轮保持。
        have_frame 用 static 保存"曾经收到过帧"这一状态, 避免

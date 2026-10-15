@@ -1118,6 +1118,16 @@
               <FilePath>.\icode\task\oled_task.h</FilePath>
             </File>
             <File>
+              <FileName>menu_task.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\icode\task\menu_task.c</FilePath>
+            </File>
+            <File>
+              <FileName>menu_task.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\icode\task\menu_task.h</FilePath>
+            </File>
+            <File>
               <FileName>gps_task.c</FileName>
               <FileType>1</FileType>
               <FilePath>.\icode\task\gps_task.c</FilePath>
