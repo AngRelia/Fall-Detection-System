@@ -730,8 +730,8 @@
       <tvExp>0</tvExp>
       <tvExpOptDlg>0</tvExpOptDlg>
       <bDave2>0</bDave2>
-      <PathWithFileName>.\icode\driver\ws2812b.c</PathWithFileName>
-      <FilenameWithoutPath>ws2812b.c</FilenameWithoutPath>
+      <PathWithFileName>.\icode\driver\gps.c</PathWithFileName>
+      <FilenameWithoutPath>gps.c</FilenameWithoutPath>
       <RteFlg>0</RteFlg>
       <bShared>0</bShared>
     </File>
@@ -742,8 +742,8 @@
       <tvExp>0</tvExp>
       <tvExpOptDlg>0</tvExpOptDlg>
       <bDave2>0</bDave2>
-      <PathWithFileName>.\icode\driver\ws2812b.h</PathWithFileName>
-      <FilenameWithoutPath>ws2812b.h</FilenameWithoutPath>
+      <PathWithFileName>.\icode\driver\gps.h</PathWithFileName>
+      <FilenameWithoutPath>gps.h</FilenameWithoutPath>
       <RteFlg>0</RteFlg>
       <bShared>0</bShared>
     </File>
@@ -754,8 +754,8 @@
       <tvExp>0</tvExp>
       <tvExpOptDlg>0</tvExpOptDlg>
       <bDave2>0</bDave2>
-      <PathWithFileName>.\icode\driver\gps.c</PathWithFileName>
-      <FilenameWithoutPath>gps.c</FilenameWithoutPath>
+      <PathWithFileName>.\icode\driver\hc08.c</PathWithFileName>
+      <FilenameWithoutPath>hc08.c</FilenameWithoutPath>
       <RteFlg>0</RteFlg>
       <bShared>0</bShared>
     </File>
@@ -766,8 +766,8 @@
       <tvExp>0</tvExp>
       <tvExpOptDlg>0</tvExpOptDlg>
       <bDave2>0</bDave2>
-      <PathWithFileName>.\icode\driver\gps.h</PathWithFileName>
-      <FilenameWithoutPath>gps.h</FilenameWithoutPath>
+      <PathWithFileName>.\icode\driver\hc08.h</PathWithFileName>
+      <FilenameWithoutPath>hc08.h</FilenameWithoutPath>
       <RteFlg>0</RteFlg>
       <bShared>0</bShared>
     </File>

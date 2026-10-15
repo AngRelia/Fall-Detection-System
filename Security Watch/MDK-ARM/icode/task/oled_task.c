@@ -77,7 +77,9 @@
 #define OLED_SCREEN_KEYTEST     1
 #define OLED_SCREEN_GPS         2
 #define OLED_SCREEN_HC08        3
-#define OLED_SCREEN_SEL         OLED_SCREEN_GPS
+/* 当前默认显示 HC-08 蓝牙页（正在联调蓝牙）。
+   要看 GPS 页就把下面改成 OLED_SCREEN_GPS，要看按键页改成 OLED_SCREEN_KEYTEST。 */
+#define OLED_SCREEN_SEL         OLED_SCREEN_HC08
 
 /* 目标刷新率。整屏 OLED_Update() 在软件 I2C 下约 10~30 ms，
    10 Hz 已足够看清，且不会长时间占住 CPU。 */
