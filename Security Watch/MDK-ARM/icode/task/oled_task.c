@@ -659,9 +659,20 @@ static void OLED_HC08_Page(void)
 static void OLED_Menu_Page(void)
 {
   static Menu_View_t v;          /* static：省任务栈（结构约 90 B） */
+  static uint8_t     s_page_drawn = 0xFFU;   /* 已画在屏上的页；0xFF = 还没画过 */
   uint32_t hh, mm, ss;
 
   Menu_GetView(&v);
+
+  /* ★ 换页先清屏（关键）：四页每行画的字符串长度不同（标题 9~12 字符、状态字
+     LOST/OK、CONN/NOT CONN 等），不整屏清就会出现"上一页的尾巴"叠在新页上。
+     清的是 OLED 显存缓冲，随后由 oled_task 统一 OLED_Update() 推屏；
+     只在换页那一拍做一次，不影响 10 Hz 刷新的耗时。 */
+  if (v.page != s_page_drawn)
+  {
+    OLED_Clear();
+    s_page_drawn = v.page;
+  }
 
   /* ---------------- 1/4 总览 ---------------- */
   if (v.page == 0U)
@@ -671,7 +682,7 @@ static void OLED_Menu_Page(void)
     OLED_ShowString(0, 8, "NODE-A", OLED_6X8);
     OLED_ShowNum(42, 8, (uint32_t)v.a_rate, 3, OLED_6X8);
     OLED_ShowString(60, 8, "Hz", OLED_6X8);
-    OLED_ShowString(72, 8, (v.a_lost != 0U) ? "LOST" : "OK", OLED_6X8);
+    OLED_ShowString(72, 8, (v.a_lost != 0U) ? "LOST" : "OK  ", OLED_6X8);
 
     OLED_ShowString(0, 16, "GPS", OLED_6X8);
     OLED_ShowString(24, 16, (v.g_fix != 0U) ? "FIX" : "no ", OLED_6X8);
@@ -763,7 +774,8 @@ static void OLED_Menu_Page(void)
     OLED_ShowString(0, 0, "MENU  BLE", OLED_6X8);
 
     OLED_ShowString(0, 8, "LINK", OLED_6X8);
-    OLED_ShowString(30, 8, (v.b_conn != 0U) ? "CONN" : "NOT CONN", OLED_6X8);
+    /* 定长 8 字符：连接时 "CONN" 后面补空格，避免从 "NOT CONN" 切过来时留下 "NN" */
+    OLED_ShowString(30, 8, (v.b_conn != 0U) ? "CONN    " : "NOT CONN", OLED_6X8);
 
     OLED_ShowString(0, 16, "TXB", OLED_6X8);
     OLED_ShowNum(30, 16, v.b_txb, 8, OLED_6X8);
@@ -857,6 +869,9 @@ void OLED_Task_Entry(void *argument)
     if ((uint32_t)(xTaskGetTickCount() - s_page_tick) >= pdMS_TO_TICKS(3000)) {
       s_page_tick = xTaskGetTickCount();
       s_page = (uint8_t)((s_page + 1U) % 3U);
+      /* ★ 轮换时清屏：三页各行长度不同（标题/单位/数值位数），
+         不清就会把上一页的尾巴叠在新页上。与 GPS/HC-08/菜单页同一处理方式。 */
+      OLED_Clear();
     }
 
     /* ---- 状态栏 ---- */

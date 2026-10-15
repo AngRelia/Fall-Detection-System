@@ -176,7 +176,7 @@ HEAP 0003072
 | `VW` 有值、`MX` 20~45，但仍 `FIX NO` | 星数还不够或几何差 | 继续等；看 `ST` 是否 ≥ 4、`HDOP` 是否偏大 |
 | `FIX YES` 但 `UTC` 为 `no time` | 时间字段为空或解析异常 | 看第 1 页 `LAST POS SENT` 原文；若有时间却没显示就是解析问题 |
 | 经纬度是 0 | 从未收到定位语句 | 看第 1 页 `RMC`/`GGA` 计数与 `LAST POS SENT` |
-| 屏幕上出现上一页的残留 | 换页未清屏（旧版本） | 现已修复：换页时 `OLED_Clear()` 一次；变长文本改定长写入 |
+| 屏幕上出现上一页的残留（页面叠在一起） | **换页未清屏** + 页内变长文本 | 已修复且**四个多页屏全覆盖**：GPS 页、HC-08 页、菜单页（换页时 `OLED_Clear()` 一次）、IMU 页（3 s 轮换时清屏）；页内会变的状态字一律改**定长**写入（`"CONN    "`/`"NOT CONN"`、`"OK  "`/`"LOST"` 等）。新增多页屏时**必须照抄这三行**：<br>`static uint8_t s_page_drawn = 0xFFU;`<br>`if (page != s_page_drawn) { OLED_Clear(); s_page_drawn = page; }` |
 | 某个任务完全不运行、屏幕卡死 | FreeRTOS 堆不足（`xTaskCreate` 静默失败 + `configASSERT` 死循环） | 看 `HEAP`；用 `python tools\heap_ledger.py` 重算堆账 |
 
 ---
